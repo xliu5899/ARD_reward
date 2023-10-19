@@ -1,0 +1,1215 @@
+---
+title: "TRD Reward Clean Analysis v5"
+date: "2022-12-14"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Step 1: Data Cleaning and Setup
+
+## Load Packages
+
+```{r load-pkg, message=FALSE}
+# You can use the `message=FALSE` option to suppress the package loading messages
+library(readxl)
+library(psych)
+library(dplyr)
+library(ggplot2)
+library(lme4)
+library(lsmeans)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(mice)
+library(randomForest)
+library(caTools)
+library(mlr)
+library(tuneRanger)
+library(naniar)
+```
+
+## Import Data
+Prior to importing, 3 individuals were deleted due to not passing attention/suicide checks (> 50%). 1 individual was deleted (part_ID = "s.9d11e13d-1301-4ed0-873d-952464077079") due to missing several whole surveys in the middle
+```{r trials-dat, results='hide'}
+# The `here()` function forces the use of the project directory
+# set_here(path='/Users/xiao/Documents/Research/Reward Scale Study')
+# Read in the data. People with more than half missing values will be excluded from dataset
+df_raw <- read_excel("RM_ProlificALL_clean.xlsx")
+
+# dummy code group variable as 0 for healthy, 1 for any depression
+df_raw$MDD_dummy = dplyr::recode(df_raw$group, `1` = 1, `2` = 1, `3` = 0)
+df_raw$TRD_dummy = dplyr::recode(df_raw$group, `1` = 1, `2` = 0, `3` = -99)
+
+
+df_raw$group = dplyr::recode(df_raw$group, `1` = 'TRD', `2` = 'MDD', `3` = 'HC')
+```
+
+## Data Prep
+
+```{r miss}
+#remove one observation with missing y-variable group
+df_raw <- df_raw[!is.na(df_raw$group),]
+n = nrow(df_raw)
+
+# these observations are missing full subscales: remove from analysis. ID 	"s.04da4f79-5f0f-4850-8ecf-d884f96e521a.txt" was missing 6 full subscales and ID "s.2bc9bb18-cad3-492a-899d-29d1d353725b.txt" was missing 1 full subscale.
+df_raw <- df_raw[!(df_raw$part_ID == "s.04da4f79-5f0f-4850-8ecf-d884f96e521a.txt" | df_raw$part_ID == "s.2bc9bb18-cad3-492a-899d-29d1d353725b.txt"),]
+
+n = nrow(df_raw)
+
+miss <- miss_var_summary(df_raw)
+print(miss)
+
+missobs <- miss_case_summary(df_raw)
+print(missobs)
+
+# Print demographics of participants by group. Sex is coded '1' for Female, '2' for Male, '3' for Non-binary
+part_summary <- df_raw %>%
+  group_by(group) %>%
+  summarize(mean_age = mean(age, na.rm = TRUE))
+part_summary
+
+prop.table(table(df_raw$group, df_raw$sex), margin = 1)
+```
+
+# Raw data summary
+```{r raw-summ}
+#Create dataframe of mean scores for each scale
+
+PHQ <- df_raw %>% dplyr:: select(starts_with("PHQ"))
+PHQ[,] <- sapply(PHQ[,], as.numeric)
+
+MEIpe <- df_raw %>% dplyr:: select(starts_with("MEIPE"))
+MEIme <- df_raw %>% dplyr:: select(starts_with("MEIME"))
+MEIsm <- df_raw %>% dplyr:: select(starts_with("MEISM"))
+MEIme[,] <- sapply(MEIme[,], as.numeric)
+MEIpe[,] <- sapply(MEIpe[,], as.numeric)
+MEIsm[,] <- sapply(MEIsm[,], as.numeric)
+MEI <- data.frame(MEIpe, MEIme, MEIsm)
+
+
+TEPSa <- df_raw %>% dplyr:: select(starts_with("TEPSA"))
+TEPSc <- df_raw %>% dplyr:: select(starts_with("TEPSC"))
+TEPSa[,] <- sapply(TEPSa[,], as.numeric)
+TEPSc[,] <- sapply(TEPSc[,], as.numeric)
+TEPS <- data.frame(TEPSa, TEPSc)
+
+MASQgd <- df_raw %>% dplyr:: select(starts_with("MASQGD"))
+MASQaa <- df_raw %>% dplyr:: select(starts_with("MASQAA"))
+MASQad <- df_raw %>% dplyr:: select(starts_with("MASQAD"))
+MASQgd[,] <- sapply(MASQgd[,], as.numeric)
+MASQaa[,] <- sapply(MASQaa[,], as.numeric)
+MASQad[,] <- sapply(MASQad[,], as.numeric)
+MASQ <- data.frame(MASQaa, MASQad, MASQgd)
+
+BFASnw <- df_raw %>% dplyr:: select(starts_with("BFASNW"))
+BFASnv <- df_raw %>% dplyr:: select(starts_with("BFASNV"))
+BFASee <- df_raw %>% dplyr:: select(starts_with("BFASEE"))
+BFASea <- df_raw %>% dplyr:: select(starts_with("BFASEA"))
+BFASnw[,] <- sapply(BFASnw[,], as.numeric)
+BFASnv[,] <- sapply(BFASnv[,], as.numeric)
+BFASee[,] <- sapply(BFASee[,], as.numeric)
+BFASea[,] <- sapply(BFASea[,], as.numeric)
+BFAS <- data.frame(BFASnw, BFASnv, BFASee, BFASea)
+
+IDAS <- df_raw %>% dplyr:: select(starts_with("IDAS"))
+IDAS <- data.frame(sapply(IDAS[,], as.numeric))
+
+DASSd <- df_raw %>% dplyr:: select(starts_with("DASSd"))
+DASSa <- df_raw %>% dplyr:: select(starts_with("DASSa"))
+DASSs <- df_raw %>% dplyr:: select(starts_with("DASSs"))
+DASSd[,] <- sapply(DASSd[,], as.numeric)
+DASSa[,] <- sapply(DASSa[,], as.numeric)
+DASSs[,] <- sapply(DASSs[,], as.numeric)
+DASS <- data.frame(DASSd, DASSa, DASSs)
+
+BIS <- df_raw %>% dplyr:: select(starts_with("BIS"))
+BASd <- df_raw %>% dplyr:: select(starts_with("BASD"))
+BASr <- df_raw %>% dplyr:: select(starts_with("BASRR"))
+BASf <- df_raw %>% dplyr:: select(starts_with("BASF"))
+BIS[,] <- sapply(BIS[,], as.numeric)
+BASd[,] <- sapply(BASd[,], as.numeric)
+BASr[,] <- sapply(BASr[,], as.numeric)
+BASf[,] <- sapply(BASf[,], as.numeric)
+BAS <- data.frame(BASd, BASf, BASr)
+BISBAS <- data.frame(BIS, BASd, BASf, BASr)
+
+ACIPSgs <- df_raw %>% dplyr:: select(starts_with("ACIPSgs"))
+ACIPSis <- df_raw %>% dplyr:: select(starts_with("ACIPSis"))
+ACIPSsb <- df_raw %>% dplyr:: select(starts_with("ACIPSsb"))
+ACIPSgs[,] <- sapply(ACIPSgs[,], as.numeric)
+ACIPSis[,] <- sapply(ACIPSis[,], as.numeric)
+ACIPSsb[,] <- sapply(ACIPSsb[,], as.numeric)
+ACIPS <- data.frame(ACIPSgs, ACIPSis, ACIPSsb)
+
+#Create dataframe of mean scores for each scale
+df_summ <- data.frame(matrix(ncol = 0, nrow = n))
+# summarize scores of scales and subscales
+
+# Calculated by scaling the differently scored items all to a Likert scale of 0-6. See MEI scoring excel file.
+df_summ$MEIme_mean <- (6/5)*rowMeans(MEIme[,c(1:2)], na.rm = TRUE) + rowMeans(MEIme[,c(3:10)], na.rm = TRUE)
+df_summ$MEIpe_mean <- (6/5)*rowMeans(MEIpe[,c(1:2,7)], na.rm = TRUE) + rowMeans(MEIpe[,c(3:6)], na.rm = TRUE)
+df_summ$MEIsm_mean <- (6/5)*rowMeans(MEIsm[,c(3:5)], na.rm = TRUE) + (6/4)*rowMeans(MEIsm[,c(6:10)], na.rm = TRUE) + rowMeans(MEIsm[,c(1,2)], na.rm = TRUE)
+
+TEPS$mean <- rowMeans(TEPS, na.rm = TRUE)
+df_summ$TEPSc_mean <- rowMeans(TEPSc, na.rm = TRUE)
+df_summ$TEPSa_mean <- rowMeans(TEPSa, na.rm = TRUE)
+
+MASQ$mean <- rowMeans(MASQ, na.rm = TRUE)
+df_summ$MASQaa_mean <- rowMeans(MASQaa, na.rm = TRUE)
+df_summ$MASQad_mean <- rowMeans(MASQad, na.rm = TRUE)
+df_summ$MASQgd_mean <- rowMeans(MASQgd, na.rm = TRUE)
+
+df_summ$BFASnw_mean <- rowMeans(BFASnw, na.rm = TRUE)
+df_summ$BFASnv_mean <- rowMeans(BFASnv, na.rm = TRUE)
+#BFAS$n_mean <- rowMeans(BFAS[,c('nv_mean', 'nw_mean')], na.rm = TRUE)
+df_summ$BFASee_mean <- rowMeans(BFASee, na.rm = TRUE)
+df_summ$BFASea_mean <- rowMeans(BFASea, na.rm = TRUE)
+#BFAS$e_mean <- rowMeans(BFAS[,c('ee_mean', 'ea_mean')], na.rm = TRUE)
+
+IDAS$mean <- rowMeans(IDAS, na.rm = TRUE)
+# only calculate Dysphoria and Lassitude subscales because they are the only complete ones and GD subscale duplicates those items
+df_summ$IDASdy_mean <- rowMeans(IDAS[,c('IDAS2', 'IDAS3', 'IDAS5', 'IDAS6', 'IDAS9', 'IDAS14', 'IDAS15', 'IDAS17', 'IDAS22', 'IDAS23')], na.rm = TRUE)
+df_summ$IDASla_mean <- rowMeans(IDAS[,c('IDAS4', 'IDAS12', 'IDAS13', 'IDAS16', 'IDAS20', 'IDAS21')], na.rm = TRUE)
+
+DASS$mean <- rowMeans(DASS, na.rm = TRUE)
+df_summ$DASSd_mean <- rowMeans(DASSd, na.rm = TRUE)
+df_summ$DASSa_mean <- rowMeans(DASSa, na.rm = TRUE)
+df_summ$DASSs_mean <- rowMeans(DASSs, na.rm = TRUE)
+
+df_summ$BIS_mean <- rowMeans(BIS, na.rm = TRUE)
+df_summ$BASd_mean <- rowMeans(BASd, na.rm = TRUE)
+df_summ$BASr_mean <- rowMeans(BASr, na.rm = TRUE)
+df_summ$BASf_mean <- rowMeans(BASf, na.rm = TRUE)
+
+ACIPS$mean <- rowMeans(ACIPS, na.rm = TRUE)
+df_summ$ACIPSgs_mean <- rowMeans(ACIPSgs, na.rm = TRUE)
+df_summ$ACIPSis_mean <- rowMeans(ACIPSis, na.rm = TRUE)
+df_summ$ACIPSsb_mean <- rowMeans(ACIPSsb, na.rm = TRUE)
+
+df_summ$group = df_raw$group
+df_summ$PHQ_mean <- rowMeans(PHQ, na.rm = TRUE)
+
+group_summ <- tbl_summary(df_summ, by = "group",
+                       statistic = all_continuous() ~ "{mean} ({sd})") %>%
+  add_p() %>% 
+  add_q() %>%
+  as_gt() %>%
+  tab_header(title = "Raw Data Summary Statistics by Diagnostic Group")
+group_summ
+```
+
+# Analyze medication data
+## Subscales of raw data
+```{r subscales, results='hide', message = FALSE, warnings = FALSE}
+df_x <- df_raw[df_raw$group %in% c('TRD','MDD'),]
+chisq.test(df_x$group, df_x$meds)
+
+# Create separate dataframes of scales and subscales for reliability and factor analyses
+
+PHQ <- df_x %>% dplyr:: select(starts_with("PHQ"))
+PHQ[,] <- sapply(PHQ[,], as.numeric)
+
+MEIpe <- df_x %>% dplyr:: select(starts_with("MEIPE"))
+MEIme <- df_x %>% dplyr:: select(starts_with("MEIME"))
+MEIsm <- df_x %>% dplyr:: select(starts_with("MEISM"))
+MEIme[,] <- sapply(MEIme[,], as.numeric)
+MEIpe[,] <- sapply(MEIpe[,], as.numeric)
+MEIsm[,] <- sapply(MEIsm[,], as.numeric)
+MEI <- data.frame(MEIpe, MEIme, MEIsm)
+
+
+TEPSa <- df_x %>% dplyr:: select(starts_with("TEPSA"))
+TEPSc <- df_x %>% dplyr:: select(starts_with("TEPSC"))
+TEPSa[,] <- sapply(TEPSa[,], as.numeric)
+TEPSc[,] <- sapply(TEPSc[,], as.numeric)
+TEPS <- data.frame(TEPSa, TEPSc)
+
+MASQgd <- df_x %>% dplyr:: select(starts_with("MASQGD"))
+MASQaa <- df_x %>% dplyr:: select(starts_with("MASQAA"))
+MASQad <- df_x %>% dplyr:: select(starts_with("MASQAD"))
+MASQgd[,] <- sapply(MASQgd[,], as.numeric)
+MASQaa[,] <- sapply(MASQaa[,], as.numeric)
+MASQad[,] <- sapply(MASQad[,], as.numeric)
+MASQ <- data.frame(MASQaa, MASQad, MASQgd)
+
+BFASnw <- df_x %>% dplyr:: select(starts_with("BFASNW"))
+BFASnv <- df_x %>% dplyr:: select(starts_with("BFASNV"))
+BFASee <- df_x %>% dplyr:: select(starts_with("BFASEE"))
+BFASea <- df_x %>% dplyr:: select(starts_with("BFASEA"))
+BFASnw[,] <- sapply(BFASnw[,], as.numeric)
+BFASnv[,] <- sapply(BFASnv[,], as.numeric)
+BFASee[,] <- sapply(BFASee[,], as.numeric)
+BFASea[,] <- sapply(BFASea[,], as.numeric)
+BFAS <- data.frame(BFASnw, BFASnv, BFASee, BFASea)
+
+IDAS <- df_x %>% dplyr:: select(starts_with("IDAS"))
+IDAS <- data.frame(sapply(IDAS[,], as.numeric))
+
+DASSd <- df_x %>% dplyr:: select(starts_with("DASSd"))
+DASSa <- df_x %>% dplyr:: select(starts_with("DASSa"))
+DASSs <- df_x %>% dplyr:: select(starts_with("DASSs"))
+DASSd[,] <- sapply(DASSd[,], as.numeric)
+DASSa[,] <- sapply(DASSa[,], as.numeric)
+DASSs[,] <- sapply(DASSs[,], as.numeric)
+DASS <- data.frame(DASSd, DASSa, DASSs)
+
+BIS <- df_x %>% dplyr:: select(starts_with("BIS"))
+BASd <- df_x %>% dplyr:: select(starts_with("BASD"))
+BASr <- df_x %>% dplyr:: select(starts_with("BASRR"))
+BASf <- df_x %>% dplyr:: select(starts_with("BASF"))
+BIS[,] <- sapply(BIS[,], as.numeric)
+BASd[,] <- sapply(BASd[,], as.numeric)
+BASr[,] <- sapply(BASr[,], as.numeric)
+BASf[,] <- sapply(BASf[,], as.numeric)
+BAS <- data.frame(BASd, BASf, BASr)
+BISBAS <- data.frame(BIS, BASd, BASf, BASr)
+
+ACIPSgs <- df_x %>% dplyr:: select(starts_with("ACIPSgs"))
+ACIPSis <- df_x %>% dplyr:: select(starts_with("ACIPSis"))
+ACIPSsb <- df_x %>% dplyr:: select(starts_with("ACIPSsb"))
+ACIPSgs[,] <- sapply(ACIPSgs[,], as.numeric)
+ACIPSis[,] <- sapply(ACIPSis[,], as.numeric)
+ACIPSsb[,] <- sapply(ACIPSsb[,], as.numeric)
+ACIPS <- data.frame(ACIPSgs, ACIPSis, ACIPSsb)
+
+#Create dataframe of mean scores for each scale
+df <- data.frame(matrix(ncol = 0, nrow = 293))
+# summarize scores of scales and subscales
+df$PHQ_mean <-rowMeans(PHQ, na.rm = TRUE)
+
+# Calculated by scaling the differently scored items all to a Likert scale of 0-6. See MEI scoring excel file.
+df$MEIme_mean <- (6/5)*rowMeans(MEIme[,c(1:2)], na.rm = TRUE) + rowMeans(MEIme[,c(3:10)], na.rm = TRUE)
+df$MEIpe_mean <- (6/5)*rowMeans(MEIpe[,c(1:2,7)], na.rm = TRUE) + rowMeans(MEIpe[,c(3:6)], na.rm = TRUE)
+df$MEIsm_mean <- (6/5)*rowMeans(MEIsm[,c(3:5)], na.rm = TRUE) + (6/4)*rowMeans(MEIsm[,c(6:10)], na.rm = TRUE) + rowMeans(MEIsm[,c(1,2)], na.rm = TRUE)
+
+TEPS$mean <- rowMeans(TEPS, na.rm = TRUE)
+df$TEPSc_mean <- rowMeans(TEPSc, na.rm = TRUE)
+df$TEPSa_mean <- rowMeans(TEPSa, na.rm = TRUE)
+
+MASQ$mean <- rowMeans(MASQ, na.rm = TRUE)
+df$MASQaa_mean <- rowMeans(MASQaa, na.rm = TRUE)
+df$MASQad_mean <- rowMeans(MASQad, na.rm = TRUE)
+df$MASQgd_mean <- rowMeans(MASQgd, na.rm = TRUE)
+
+df$BFASnw_mean <- rowMeans(BFASnw, na.rm = TRUE)
+df$BFASnv_mean <- rowMeans(BFASnv, na.rm = TRUE)
+#BFAS$n_mean <- rowMeans(BFAS[,c('nv_mean', 'nw_mean')], na.rm = TRUE)
+df$BFASee_mean <- rowMeans(BFASee, na.rm = TRUE)
+df$BFASea_mean <- rowMeans(BFASea, na.rm = TRUE)
+#BFAS$e_mean <- rowMeans(BFAS[,c('ee_mean', 'ea_mean')], na.rm = TRUE)
+
+IDAS$mean <- rowMeans(IDAS, na.rm = TRUE)
+# only calculate Dysphoria and Lassitude subscales because they are the only complete ones and GD subscale duplicates those items
+df$IDASdy_mean <- rowMeans(IDAS[,c('IDAS2', 'IDAS3', 'IDAS5', 'IDAS6', 'IDAS9', 'IDAS14', 'IDAS15', 'IDAS17', 'IDAS22', 'IDAS23')], na.rm = TRUE)
+df$IDASla_mean <- rowMeans(IDAS[,c('IDAS4', 'IDAS12', 'IDAS13', 'IDAS16', 'IDAS20', 'IDAS21')], na.rm = TRUE)
+
+DASS$mean <- rowMeans(DASS, na.rm = TRUE)
+df$DASSd_mean <- rowMeans(DASSd, na.rm = TRUE)
+df$DASSa_mean <- rowMeans(DASSa, na.rm = TRUE)
+df$DASSs_mean <- rowMeans(DASSs, na.rm = TRUE)
+
+df$BIS_mean <- rowMeans(BIS, na.rm = TRUE)
+df$BASd_mean <- rowMeans(BASd, na.rm = TRUE)
+df$BASr_mean <- rowMeans(BASr, na.rm = TRUE)
+df$BASf_mean <- rowMeans(BASf, na.rm = TRUE)
+
+ACIPS$mean <- rowMeans(ACIPS, na.rm = TRUE)
+df$ACIPSgs_mean <- rowMeans(ACIPSgs, na.rm = TRUE)
+df$ACIPSis_mean <- rowMeans(ACIPSis, na.rm = TRUE)
+df$ACIPSsb_mean <- rowMeans(ACIPSsb, na.rm = TRUE)
+
+# make sure no missing
+sum(is.na(df))
+
+#add in group and meds variable
+df$group = df_x$group
+df$meds = df_x$meds
+
+## Summary by meds and group
+library(gt)
+meds_summ <- 
+  df %>%
+  tbl_strata(
+    strata = meds,
+    .tbl_fun =
+      ~ .x %>% tbl_summary(
+        by = "group",
+        statistic = all_continuous() ~ "{mean} ({sd})")
+    )
+meds_summ
+```
+
+## Compute FDR using BH adjustment
+```{r fdr-med}
+library(FDRestimation)
+
+df$group = dplyr::recode(df$group, `TRD` = '0', `MDD` = '1')
+df$group <- sapply(df$group, as.numeric)
+fit <- glm(group ~ DASSd_mean*meds, data = df, family = "binomial")
+summary(fit)
+
+pval = c(.0713, .795, .06534, .782, .42, .41, .042, .11977, .902, .041, .724, .212, .20129, .019, .17638, .004, .09739, .247, .4069, .786, .045, .964, .642, .983)
+
+p.fdr(pval)
+```
+
+# Impute and prep test data
+## Data splits
+```{r splits}
+# Data splits
+set.seed(100)
+split <- sample.split(df_raw$group, SplitRatio = 0.7)
+train_raw <- subset(df_raw, split == "TRUE")
+test_raw <- subset(df_raw, split == "FALSE")
+```
+
+## Impute Test Data
+```{r mice-test}
+# imputation using predictive mean matching
+set.seed(100)
+test <- complete(mice(test_raw[,c(8,11:241)],
+                          m = 1,
+                          method = "pmm"))
+# check any na's are remaining
+sum(is.na(test))
+```
+
+## Imputed test data subscales
+```{r imp-t, results='hide', message = FALSE, warnings = FALSE}
+# calculate subscales dataframe of imputed data
+PHQ <- test %>% dplyr:: select(starts_with("PHQ"))
+PHQ[,] <- sapply(PHQ[,], as.numeric)
+
+MEIpe <- test %>% dplyr:: select(starts_with("MEIPE"))
+MEIme <- test %>% dplyr:: select(starts_with("MEIME"))
+MEIsm <- test %>% dplyr:: select(starts_with("MEISM"))
+MEIme[,] <- sapply(MEIme[,], as.numeric)
+MEIpe[,] <- sapply(MEIpe[,], as.numeric)
+MEIsm[,] <- sapply(MEIsm[,], as.numeric)
+MEI <- data.frame(MEIpe, MEIme, MEIsm)
+
+
+TEPSa <- test %>% dplyr:: select(starts_with("TEPSA"))
+TEPSc <- test %>% dplyr:: select(starts_with("TEPSC"))
+TEPSa[,] <- sapply(TEPSa[,], as.numeric)
+TEPSc[,] <- sapply(TEPSc[,], as.numeric)
+TEPS <- data.frame(TEPSa, TEPSc)
+
+MASQgd <- test %>% dplyr:: select(starts_with("MASQGD"))
+MASQaa <- test %>% dplyr:: select(starts_with("MASQAA"))
+MASQad <- test %>% dplyr:: select(starts_with("MASQAD"))
+MASQgd[,] <- sapply(MASQgd[,], as.numeric)
+MASQaa[,] <- sapply(MASQaa[,], as.numeric)
+MASQad[,] <- sapply(MASQad[,], as.numeric)
+MASQ <- data.frame(MASQaa, MASQad, MASQgd)
+
+BFASnw <- test %>% dplyr:: select(starts_with("BFASNW"))
+BFASnv <- test %>% dplyr:: select(starts_with("BFASNV"))
+BFASee <- test %>% dplyr:: select(starts_with("BFASEE"))
+BFASea <- test %>% dplyr:: select(starts_with("BFASEA"))
+BFASnw[,] <- sapply(BFASnw[,], as.numeric)
+BFASnv[,] <- sapply(BFASnv[,], as.numeric)
+BFASee[,] <- sapply(BFASee[,], as.numeric)
+BFASea[,] <- sapply(BFASea[,], as.numeric)
+BFAS <- data.frame(BFASnw, BFASnv, BFASee, BFASea)
+
+IDAS <- test %>% dplyr:: select(starts_with("IDAS"))
+IDAS <- data.frame(sapply(IDAS[,], as.numeric))
+
+DASSd <- test %>% dplyr:: select(starts_with("DASSd"))
+DASSa <- test %>% dplyr:: select(starts_with("DASSa"))
+DASSs <- test %>% dplyr:: select(starts_with("DASSs"))
+DASSd[,] <- sapply(DASSd[,], as.numeric)
+DASSa[,] <- sapply(DASSa[,], as.numeric)
+DASSs[,] <- sapply(DASSs[,], as.numeric)
+DASS <- data.frame(DASSd, DASSa, DASSs)
+
+BIS <- test %>% dplyr:: select(starts_with("BIS"))
+BASd <- test %>% dplyr:: select(starts_with("BASD"))
+BASr <- test %>% dplyr:: select(starts_with("BASRR"))
+BASf <- test %>% dplyr:: select(starts_with("BASF"))
+BIS[,] <- sapply(BIS[,], as.numeric)
+BASd[,] <- sapply(BASd[,], as.numeric)
+BASr[,] <- sapply(BASr[,], as.numeric)
+BASf[,] <- sapply(BASf[,], as.numeric)
+BAS <- data.frame(BASd, BASf, BASr)
+BISBAS <- data.frame(BIS, BASd, BASf, BASr)
+
+ACIPSgs <- test %>% dplyr:: select(starts_with("ACIPSgs"))
+ACIPSis <- test %>% dplyr:: select(starts_with("ACIPSis"))
+ACIPSsb <- test %>% dplyr:: select(starts_with("ACIPSsb"))
+ACIPSgs[,] <- sapply(ACIPSgs[,], as.numeric)
+ACIPSis[,] <- sapply(ACIPSis[,], as.numeric)
+ACIPSsb[,] <- sapply(ACIPSsb[,], as.numeric)
+ACIPS <- data.frame(ACIPSgs, ACIPSis, ACIPSsb)
+
+# summarize scores of scales and subscales
+test$PHQ_mean <-rowMeans(PHQ, na.rm = TRUE)
+
+# Calculated by scaling the differently scored items all to a Likert scale of 0-6. See MEI scoring excel file.
+test$MEIme_mean <- (6/5)*rowMeans(MEIme[,c(1:2)], na.rm = TRUE) + rowMeans(MEIme[,c(3:10)], na.rm = TRUE)
+test$MEIpe_mean <- (6/5)*rowMeans(MEIpe[,c(1:2,7)], na.rm = TRUE) + rowMeans(MEIpe[,c(3:6)], na.rm = TRUE)
+test$MEIsm_mean <- (6/5)*rowMeans(MEIsm[,c(3:5)], na.rm = TRUE) + (6/4)*rowMeans(MEIsm[,c(6:10)], na.rm = TRUE) + rowMeans(MEIsm[,c(1,2)], na.rm = TRUE)
+
+test$TEPSc_mean <- rowMeans(TEPSc, na.rm = TRUE)
+test$TEPSa_mean <- rowMeans(TEPSa, na.rm = TRUE)
+
+test$MASQaa_mean <- rowMeans(MASQaa, na.rm = TRUE)
+test$MASQad_mean <- rowMeans(MASQad, na.rm = TRUE)
+test$MASQgd_mean <- rowMeans(MASQgd, na.rm = TRUE)
+
+test$BFASnw_mean <- rowMeans(BFASnw, na.rm = TRUE)
+test$BFASnv_mean <- rowMeans(BFASnv, na.rm = TRUE)
+#BFAS$n_mean <- rowMeans(BFAS[,c('nv_mean', 'nw_mean')], na.rm = TRUE)
+test$BFASee_mean <- rowMeans(BFASee, na.rm = TRUE)
+test$BFASea_mean <- rowMeans(BFASea, na.rm = TRUE)
+#BFAS$e_mean <- rowMeans(BFAS[,c('ee_mean', 'ea_mean')], na.rm = TRUE)
+
+# only calculate Dysphoria and Lassitude subscales because they are the only complete ones and GD subscale duplicates those items
+test$IDASdy_mean <- rowMeans(IDAS[,c('IDAS2', 'IDAS3', 'IDAS5', 'IDAS6', 'IDAS9', 'IDAS14', 'IDAS15', 'IDAS17', 'IDAS22', 'IDAS23')], na.rm = TRUE)
+test$IDASla_mean <- rowMeans(IDAS[,c('IDAS4', 'IDAS12', 'IDAS13', 'IDAS16', 'IDAS20', 'IDAS21')], na.rm = TRUE)
+
+test$DASSd_mean <- rowMeans(DASSd, na.rm = TRUE)
+test$DASSa_mean <- rowMeans(DASSa, na.rm = TRUE)
+test$DASSs_mean <- rowMeans(DASSs, na.rm = TRUE)
+
+test$BIS_mean <- rowMeans(BIS, na.rm = TRUE)
+test$BASd_mean <- rowMeans(BASd, na.rm = TRUE)
+test$BASr_mean <- rowMeans(BASr, na.rm = TRUE)
+test$BASf_mean <- rowMeans(BASf, na.rm = TRUE)
+
+test$ACIPSgs_mean <- rowMeans(ACIPSgs, na.rm = TRUE)
+test$ACIPSis_mean <- rowMeans(ACIPSis, na.rm = TRUE)
+test$ACIPSsb_mean <- rowMeans(ACIPSsb, na.rm = TRUE)
+```
+
+
+# Impute and Prep train data
+## Impute Train Data
+```{r mice-train}
+# imputation using predictive mean matching
+set.seed(100)
+train <- complete(mice(train_raw[,c(8,11:241)],
+                          m = 1,
+                          method = "pmm"))
+# check any na's are remaining
+sum(is.na(train))
+```
+
+## Imputed train data subscales
+```{r imp-tr, results='hide', message = FALSE, warnings = FALSE}
+# recalculate subscales dataframe of imputed data
+
+PHQ <- train %>% dplyr:: select(starts_with("PHQ"))
+PHQ[,] <- sapply(PHQ[,], as.numeric)
+
+MEIpe <- train %>% dplyr:: select(starts_with("MEIPE"))
+MEIme <- train %>% dplyr:: select(starts_with("MEIME"))
+MEIsm <- train %>% dplyr:: select(starts_with("MEISM"))
+MEIme[,] <- sapply(MEIme[,], as.numeric)
+MEIpe[,] <- sapply(MEIpe[,], as.numeric)
+MEIsm[,] <- sapply(MEIsm[,], as.numeric)
+MEI <- data.frame(MEIpe, MEIme, MEIsm)
+
+
+TEPSa <- train %>% dplyr:: select(starts_with("TEPSA"))
+TEPSc <- train %>% dplyr:: select(starts_with("TEPSC"))
+TEPSa[,] <- sapply(TEPSa[,], as.numeric)
+TEPSc[,] <- sapply(TEPSc[,], as.numeric)
+TEPS <- data.frame(TEPSa, TEPSc)
+
+MASQgd <- train %>% dplyr:: select(starts_with("MASQGD"))
+MASQaa <- train %>% dplyr:: select(starts_with("MASQAA"))
+MASQad <- train %>% dplyr:: select(starts_with("MASQAD"))
+MASQgd[,] <- sapply(MASQgd[,], as.numeric)
+MASQaa[,] <- sapply(MASQaa[,], as.numeric)
+MASQad[,] <- sapply(MASQad[,], as.numeric)
+MASQ <- data.frame(MASQaa, MASQad, MASQgd)
+
+BFASnw <- train %>% dplyr:: select(starts_with("BFASNW"))
+BFASnv <- train %>% dplyr:: select(starts_with("BFASNV"))
+BFASee <- train %>% dplyr:: select(starts_with("BFASEE"))
+BFASea <- train %>% dplyr:: select(starts_with("BFASEA"))
+BFASnw[,] <- sapply(BFASnw[,], as.numeric)
+BFASnv[,] <- sapply(BFASnv[,], as.numeric)
+BFASee[,] <- sapply(BFASee[,], as.numeric)
+BFASea[,] <- sapply(BFASea[,], as.numeric)
+BFAS <- data.frame(BFASnw, BFASnv, BFASee, BFASea)
+
+IDAS <- train %>% dplyr:: select(starts_with("IDAS"))
+IDAS <- data.frame(sapply(IDAS[,], as.numeric))
+
+DASSd <- train %>% dplyr:: select(starts_with("DASSd"))
+DASSa <- train %>% dplyr:: select(starts_with("DASSa"))
+DASSs <- train %>% dplyr:: select(starts_with("DASSs"))
+DASSd[,] <- sapply(DASSd[,], as.numeric)
+DASSa[,] <- sapply(DASSa[,], as.numeric)
+DASSs[,] <- sapply(DASSs[,], as.numeric)
+DASS <- data.frame(DASSd, DASSa, DASSs)
+
+BIS <- train %>% dplyr:: select(starts_with("BIS"))
+BASd <- train %>% dplyr:: select(starts_with("BASD"))
+BASr <- train %>% dplyr:: select(starts_with("BASRR"))
+BASf <- train %>% dplyr:: select(starts_with("BASF"))
+BIS[,] <- sapply(BIS[,], as.numeric)
+BASd[,] <- sapply(BASd[,], as.numeric)
+BASr[,] <- sapply(BASr[,], as.numeric)
+BASf[,] <- sapply(BASf[,], as.numeric)
+BAS <- data.frame(BASd, BASf, BASr)
+BISBAS <- data.frame(BIS, BASd, BASf, BASr)
+
+ACIPSgs <- train %>% dplyr:: select(starts_with("ACIPSgs"))
+ACIPSis <- train %>% dplyr:: select(starts_with("ACIPSis"))
+ACIPSsb <- train %>% dplyr:: select(starts_with("ACIPSsb"))
+ACIPSgs[,] <- sapply(ACIPSgs[,], as.numeric)
+ACIPSis[,] <- sapply(ACIPSis[,], as.numeric)
+ACIPSsb[,] <- sapply(ACIPSsb[,], as.numeric)
+ACIPS <- data.frame(ACIPSgs, ACIPSis, ACIPSsb)
+
+# summarize scores of scales and subscales
+train$PHQ_mean <-rowMeans(PHQ, na.rm = TRUE)
+
+# Calculated by scaling the differently scored items all to a Likert scale of 0-6. See MEI scoring excel file.
+train$MEIme_mean <- (6/5)*rowMeans(MEIme[,c(1:2)], na.rm = TRUE) + rowMeans(MEIme[,c(3:10)], na.rm = TRUE)
+train$MEIpe_mean <- (6/5)*rowMeans(MEIpe[,c(1:2,7)], na.rm = TRUE) + rowMeans(MEIpe[,c(3:6)], na.rm = TRUE)
+train$MEIsm_mean <- (6/5)*rowMeans(MEIsm[,c(3:5)], na.rm = TRUE) + (6/4)*rowMeans(MEIsm[,c(6:10)], na.rm = TRUE) + rowMeans(MEIsm[,c(1,2)], na.rm = TRUE)
+
+train$TEPSc_mean <- rowMeans(TEPSc, na.rm = TRUE)
+train$TEPSa_mean <- rowMeans(TEPSa, na.rm = TRUE)
+
+train$MASQaa_mean <- rowMeans(MASQaa, na.rm = TRUE)
+train$MASQad_mean <- rowMeans(MASQad, na.rm = TRUE)
+train$MASQgd_mean <- rowMeans(MASQgd, na.rm = TRUE)
+
+train$BFASnw_mean <- rowMeans(BFASnw, na.rm = TRUE)
+train$BFASnv_mean <- rowMeans(BFASnv, na.rm = TRUE)
+#BFAS$n_mean <- rowMeans(BFAS[,c('nv_mean', 'nw_mean')], na.rm = TRUE)
+train$BFASee_mean <- rowMeans(BFASee, na.rm = TRUE)
+train$BFASea_mean <- rowMeans(BFASea, na.rm = TRUE)
+#BFAS$e_mean <- rowMeans(BFAS[,c('ee_mean', 'ea_mean')], na.rm = TRUE)
+
+# only calculate Dysphoria and Lassitude subscales because they are the only complete ones and GD subscale duplicates those items
+train$IDASdy_mean <- rowMeans(IDAS[,c('IDAS2', 'IDAS3', 'IDAS5', 'IDAS6', 'IDAS9', 'IDAS14', 'IDAS15', 'IDAS17', 'IDAS22', 'IDAS23')], na.rm = TRUE)
+train$IDASla_mean <- rowMeans(IDAS[,c('IDAS4', 'IDAS12', 'IDAS13', 'IDAS16', 'IDAS20', 'IDAS21')], na.rm = TRUE)
+
+train$DASSd_mean <- rowMeans(DASSd, na.rm = TRUE)
+train$DASSa_mean <- rowMeans(DASSa, na.rm = TRUE)
+train$DASSs_mean <- rowMeans(DASSs, na.rm = TRUE)
+
+train$BIS_mean <- rowMeans(BIS, na.rm = TRUE)
+train$BASd_mean <- rowMeans(BASd, na.rm = TRUE)
+train$BASr_mean <- rowMeans(BASr, na.rm = TRUE)
+train$BASf_mean <- rowMeans(BASf, na.rm = TRUE)
+
+train$ACIPSgs_mean <- rowMeans(ACIPSgs, na.rm = TRUE)
+train$ACIPSis_mean <- rowMeans(ACIPSis, na.rm = TRUE)
+train$ACIPSsb_mean <- rowMeans(ACIPSsb, na.rm = TRUE)
+
+group_summ_imp <- tbl_summary(train[,c(1,233:257)], by = "group",
+                       statistic = all_continuous() ~ "{mean} ({sd})") %>%
+  add_p() %>% 
+  add_q() %>%
+  as_gt() %>%
+  tab_header(title = "Imputed Summary Statistics by Diagnostic Group")
+group_summ_imp
+```
+
+## Imputed Train Data Depression Differences by Group
+```{r imp-train-dep}
+df_summ %>%
+  ggplot() +
+  aes(x = PHQ_mean, fill = group) +
+  geom_density(alpha = 0.5) +
+  labs(x = "PHQ-9 score", y = "Density", title = "Distribution of Depression Groups Raw")
+
+df_summ %>%
+  group_by(group) %>%
+  summarise_at(vars(PHQ_mean), list(name = mean))
+m1_imp <- aov(PHQ_mean ~ group, data = df_summ)
+summary(m1_imp)
+TukeyHSD(m1_imp)
+
+m2_imp <- aov(PHQ_mean ~ group*meds, data = train)
+summary(m2_imp) #interaction not significant
+```
+
+# 3-Way RF classification
+## All groups: Full model with CV
+```{r mtry-all}
+library(randomForest)
+library(mlbench)
+library(caret)
+
+#Create control function for training with 10 folds and keep 3 folds for training. search method is grid.
+set.seed(100)
+control <- trainControl(method='repeatedcv', 
+                        number=10, 
+                        repeats=3, 
+                        search='grid')
+#create tunegrid with 15 values from 1:23 for mtry tuning model. Our train function will change number of entry variable at each split according to tunegrid. 
+tunefull <- expand.grid(.mtry = (1:23)) 
+full_3way <- caret::train(group ~ ., 
+                       data = train[,c(1,234:257)], #exclude PHQ
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 500,
+                       tuneGrid = tunefull)
+print(full_3way)
+plot(full_3way)
+full_3way$finalModel
+
+## Generate predictions
+f3_y_pred <- predict(
+        
+        ## Random forest object
+        object = full_3way, 
+        
+        ## Data to use for predictions; remove group
+        newdata = test[,c(234:257)])
+
+# Confusion Matrix
+f3_cm = table(f3_y_pred, test$group)
+caret::confusionMatrix(f3_cm, reference = test$group)
+
+## Print the accuracy
+accuracy <- mean(f3_y_pred == test$group)*100
+cat('Accuracy on testing data: ', round(accuracy, 2), '%',  sep='')
+```
+
+# Variable selection 3-way
+
+library(varSelRF)
+set.seed(1)
+varselmod3 <- varSelRF(train[,c(234:257)], as.factor(train$group), ntree = 5000, ntreeIterat = 2000)
+sel3 <- as.data.frame(varselmod3$selected.vars) # save selected variables to df
+
+for (i in 2:500){
+  set.seed(i)
+  varselmod3 <- varSelRF(train[,c(234:257)], as.factor(train$group), ntree = 5000, ntreeIterat = 2000)
+  new <- as.data.frame(varselmod3$selected.vars) # save this round selected variables to df
+  sel3 <- rbind(new, sel3) # append to the end of the stored df
+}
+table(sel3)
+
+
+## 3-way Small model testing
+```{r rf-3small}
+set.seed(100)
+
+tunesmall <- expand.grid(.mtry = (1:4)) 
+
+# > 80% of models
+small3_vars = c("DASSa_mean", "MEIme_mean", "MASQaa_mean", "IDASdy_mean", "MEIpe_mean")
+
+all_small <- caret::train(group ~ ., 
+                       data = train[,c("group", small3_vars)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 500,
+                       tuneGrid = tunesmall)
+
+all_small
+all_small$finalModel
+
+# Predicting the Test set results
+sm3_y_pred <- predict(
+        
+        ## Random forest object
+        object=all_small, 
+        
+        ## Data to use for predictions; remove group
+        newdata=test[,small3_vars])
+  
+# Confusion Matrix
+confusion_mtx_m = table(sm3_y_pred, test$group)
+caret::confusionMatrix(confusion_mtx_m)
+```
+
+
+# 2-way: TRD vs Other
+```{r trd-dummy}
+train$TRD_dummy = dplyr::recode(train$group, `TRD` = 'TRD', `MDD` = 'NTRD', `HC` = 'NTRD')
+test$TRD_dummy = dplyr::recode(test$group, `TRD` = 'TRD', `MDD` = 'NTRD', `HC` = 'NTRD')
+
+# get proportion of each group
+table(train$TRD_dummy) #balancing not needed
+```
+
+## TRD vs Other: Full model with CV
+```{r full-dum}
+library(randomForest)
+library(mlbench)
+library(caret)
+
+set.seed(100)
+
+full_TRD <- caret::train(TRD_dummy ~ ., 
+                       data = train[,c(234:258)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 500,
+                       tuneGrid = tunefull)
+
+full_TRD
+full_TRD$finalModel
+
+## Generate predictions
+TRD_y_pred <- predict(
+        
+        ## Random forest object
+        object = full_TRD, 
+        
+        ## Data to use for predictions; remove group
+        newdata = test[,c(234:257)])
+
+# Test Confusion Matrix
+ftd_cm = table(TRD_y_pred, test$TRD_dummy)
+caret::confusionMatrix(ftd_cm, positive = 'TRD', reference = test$TRD_dummy)
+
+## Print accuracy
+accuracy <- mean(TRD_y_pred == test$TRD_dummy)*100
+cat('Accuracy on testing data: ', round(accuracy, 2), '%',  sep='')
+```
+
+## Variable selection 2-way: TRD vs Other
+
+library(varSelRF)
+set.seed(1)
+varselmod2 <- varSelRF(train[,c(234:257)], as.factor(train$TRD_dummy), ntree = 5000, ntreeIterat = 2000)
+sel_dum <- as.data.frame(varselmod2$selected.vars) # save selected variables to df
+
+for (i in 2:500){
+  set.seed(i)
+  varselmod2 <- varSelRF(train[,c(234:257)], as.factor(train$TRD_dummy), ntree = 5000, ntreeIterat = 2000)
+  new <- as.data.frame(varselmod2$selected.vars) # save this round selected variables to df
+  sel_dum <- rbind(new, sel_dum) # append to the end of the stored df
+}
+table(sel_dum)
+
+
+## TRD vs. Other 2-way Small model
+```{r rf-2trd}
+set.seed(100)
+
+tunesmall <- expand.grid(.mtry = (1:4)) 
+
+# > 80% of models
+small2_vars = c("DASSa_mean", "MEIme_mean", "DASSs_mean", "IDASdy_mean", "DASSd_mean")
+
+trd_small <- caret::train(TRD_dummy ~ ., 
+                       data = train[,c("TRD_dummy", small2_vars)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 500,
+                       tuneGrid = tunesmall)
+
+trd_small
+trd_small$finalModel
+
+# Predicting the Test set results
+sm2_y_pred <- predict(
+        
+        ## Random forest object
+        object=trd_small, 
+        
+        ## Data to use for predictions; remove group
+        newdata=test[,small2_vars])
+  
+# Confusion Matrix
+sm2_cm = table(sm2_y_pred, test$TRD_dummy)
+caret::confusionMatrix(sm2_cm, positive = 'TRD', reference = test$TRD_dummy)
+```
+
+
+# 2-way: TRD vs. MDD
+## TRD vs MDD: Full model with CV
+```{r full-trd}
+library(randomForest)
+library(mlbench)
+library(caret)
+
+#train$meds <- train_raw$meds
+#trainDEP <- train[train$group %in% c('TRD','MDD'),]
+
+#test$meds <- test_raw$meds
+#testDEP <- test[test$group %in% c('TRD','MDD'),]
+
+
+set.seed(100)
+
+full_DEP <- caret::train(group ~ ., 
+                       data = trainDEP[,c(1,234:257)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 500,
+                       tuneGrid = tunefull)
+
+full_DEP
+full_DEP$finalModel
+
+## Generate predictions
+DEP_y_pred <- predict(
+        
+        ## Random forest object
+        object = full_DEP, 
+        
+        ## Data to use for predictions; remove group
+        newdata = testDEP[,c(234:257)])
+
+# Test Confusion Matrix
+fdep_cm = table(DEP_y_pred, testDEP$group)
+caret::confusionMatrix(fdep_cm, positive = 'TRD', reference = testDEP$group)
+```
+
+## Variable selection 2-way: TRD vs MDD only
+
+library(varSelRF)
+set.seed(1)
+varselmod1 <- varSelRF(trainDEP[,c(234:257,258)], as.factor(trainDEP$group), ntree = 5000, ntreeIterat = 2000)
+selDEP <- as.data.frame(varselmod1$selected.vars) # save selected variables to df
+
+for (i in 2:500){
+  set.seed(i)
+  varselmod1 <- varSelRF(trainDEP[,c(234:257,258)], as.factor(trainDEP$group), ntree = 5000, ntreeIterat = 2000)
+  new <- as.data.frame(varselmod1$selected.vars) # save this round selected variables to df
+  selDEP <- rbind(new, selDEP) # append to the end of the stored df
+}
+table(selDEP)
+
+
+
+## TRD vs. MDD 2-way Small model (include DASSa)
+```{r rf-trdmdd}
+set.seed(100)
+
+
+dep_vars = c("DASSd_mean", "MEIsm_mean", "DASSa_mean")
+tune <- expand.grid(.mtry = (1:2)) 
+
+dep_small <- caret::train(group ~ ., 
+                       data = trainDEP[,c("group", dep_vars)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 500,
+                       tuneGrid = tune)
+
+dep_small$finalModel
+
+# Predicting the Test set results
+smd_y_pred <- predict(
+        
+        ## Random forest object
+        object=dep_small, 
+        
+        ## Data to use for predictions; remove group
+        newdata=testDEP[,dep_vars])
+  
+# Confusion Matrix
+smd_cm = table(smd_y_pred, testDEP$group)
+caret::confusionMatrix(smd_cm, positive = 'TRD', reference = testDEP$group)
+```
+
+
+
+# Using TRD vs MDD variables to train the other comparisons
+
+## TRD vs. Other small model using DEP vars
+```{r rf-trd2}
+set.seed(100)
+
+tune <- expand.grid(.mtry = (1:2)) 
+
+trd2_small <- caret::train(TRD_dummy ~ ., 
+                       data = train[,c("TRD_dummy", dep_vars)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 500,
+                       tuneGrid = tune)
+
+trd2_small$finalModel
+
+# Predicting the Test set results
+trd2_y_pred <- predict(
+        
+        ## Random forest object
+        object=trd2_small, 
+        
+        ## Data to use for predictions; remove group
+        newdata=test[,dep_vars])
+  
+# Confusion Matrix
+trd2_cm = table(trd2_y_pred, test$TRD_dummy)
+caret::confusionMatrix(trd2_cm, positive = 'TRD', reference = test$TRD_dummy)
+```
+
+
+## All groups using TRD/MDD vars
+```{r rf-all2}
+set.seed(100)
+tune = expand.grid(.mtry = (1:2))
+all2_small <- caret::train(group ~ ., 
+                       data = train[,c("group", dep_vars)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 500,
+                       tuneGrid = tune)
+
+all2_small$finalModel
+
+# Predicting the Test set results
+all2_y_pred <- predict(
+        
+        ## Random forest object
+        object=all2_small, 
+        
+        ## Data to use for predictions; remove group
+        newdata=test[,dep_vars])
+  
+# Confusion Matrix
+all2_cm = table(all2_y_pred, test$group)
+caret::confusionMatrix(all2_cm, positive = 'TRD', reference = test$group)
+```
+
+
+## All groups using TRD/MDD + TRD/dummy vars
+```{r rf-all3}
+set.seed(100)
+all3_vars = c("DASSd_mean", "MEIsm_mean","DASSa_mean", "DASSs_mean", "IDASdy_mean", "MEIme_mean")
+tune3 = expand.grid(.mtry = (1:5))
+all3_small <- caret::train(group ~ ., 
+                       data = train[,c("group", all3_vars)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 500,
+                       tuneGrid = tune3)
+
+all3_small$finalModel
+
+# Predicting the Test set results
+all3_y_pred <- predict(
+        
+        ## Random forest object
+        object=all3_small, 
+        
+        ## Data to use for predictions; remove group
+        newdata=test[,all3_vars])
+  
+# Confusion Matrix
+all3_cm = table(all3_y_pred, test$group)
+caret::confusionMatrix(all3_cm, positive = 'TRD', reference = test$group)
+```
+
+
+
+
+# All dep vs HC?
+## All Dep vs HC: Full model with CV
+```{r full-hc}
+library(randomForest)
+library(mlbench)
+library(caret)
+
+train$HC_dummy = dplyr::recode(train$group, `TRD` = 'MDD')
+test$HC_dummy = dplyr::recode(test$group, `TRD` = 'MDD')
+
+set.seed(100)
+
+full_HC <- caret::train(HC_dummy ~ ., 
+                       data = train[,c(234:258)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 2000,
+                       tuneGrid = tunefull)
+
+full_HC
+full_HC$finalModel
+
+## Generate predictions
+HC_y_pred <- predict(
+        
+        ## Random forest object
+        object = full_HC, 
+        
+        ## Data to use for predictions; remove group
+        newdata = test[,c(234:257)])
+
+# Test Confusion Matrix
+fHC_cm = table(HC_y_pred, test$HC_dummy)
+caret::confusionMatrix(fHC_cm, positive = 'MDD', reference = test$HC_dummy)
+```
+
+## Variable selection 2-way: All Dep vs. HC
+```{r fs-hc}
+library(varSelRF)
+set.seed(1)
+varselmodHC <- varSelRF(train[,c(234:257)], as.factor(train$HC_dummy), ntree = 5000, ntreeIterat = 2000)
+selHC <- as.data.frame(varselmodHC$selected.vars) # save selected variables to df
+
+for (i in 2:500){
+  set.seed(i)
+  varselmodHC <- varSelRF(train[,c(234:257)], as.factor(train$HC_dummy), ntree = 5000, ntreeIterat = 2000)
+  new <- as.data.frame(varselmodHC$selected.vars) # save this round selected variables to df
+  selHC <- rbind(new, selHC) # append to the end of the stored df
+}
+table(selHC)
+```
+
+## All Dep vs. HC 2-way Small model
+```{r rf-hc-sm}
+set.seed(100)
+
+HC_vars = c("IDASdy_mean", "IDASla_mean", "MEIme_mean", "MEIpe_mean", "MASQaa_mean")
+tuneHC <- expand.grid(.mtry = (1:4)) 
+
+HC_small <- caret::train(HC_dummy ~ ., 
+                       data = train[,c("HC_dummy", HC_vars)],
+                       method = 'rf',
+                       metric = 'Accuracy',
+                       ntree = 2000,
+                       tuneGrid = tuneHC)
+
+HC_small$finalModel
+
+# Predicting the Test set results
+HC_y_pred <- predict(
+        
+        ## Random forest object
+        object=HC_small, 
+        
+        ## Data to use for predictions; remove group
+        newdata=test[,HC_vars])
+  
+# Confusion Matrix
+smhc_cm = table(HC_y_pred, test$HC_dummy)
+caret::confusionMatrix(smhc_cm, positive = 'MDD', reference = test$HC_dummy)
+```
+
+
+
+
+
+#k means
+We also used K-means, an unsupervised non-linear method used to group data based on similarity to partition data for all items in the most accurate predictor subset. Unsupervised machine learning uses statistical methods to tease out underlying patterns in data without labels. K-means will partition observations into a specified number of clusters k, which can be pre-determined by the experimenter or by examining the data. Using the “stats” and “factoextra” packages in R, we computed K-means with 3 and 4 clusters at the item level, and interpretation of the clusters is discussed.
+```{r kmeans}
+library(stats)
+library(factoextra)
+library(NbClust)
+
+# imputation using predictive mean matching
+set.seed(100)
+df_km <- df_raw %>% dplyr:: select(starts_with(c("DASSd", "MEIsm", "DASSa", "DASSs", "MEIme")))
+df_km <- cbind(df_km, df_raw[,c('IDAS2', 'IDAS3', 'IDAS5', 'IDAS6', 'IDAS9', 'IDAS14', 'IDAS15', 'IDAS17', 'IDAS22', 'IDAS23')])
+df_km_imp <- complete(mice(df_km,
+                          m = 1,
+                          method = "pmm"))
+# check any na's are remaining
+sum(is.na(df_km_imp))
+# standardize data
+df_km_imp = as.data.frame(scale(df_km_imp))
+
+# from factoextra package plots number of clusters in data by within sum of square. Find "elbow" in plot for best clustering solution. 4 groups seems optimal. we will compare 4 groups with 3 group solution
+base_fig <- fviz_nbclust(df_km_imp[,c(1:72)], kmeans, method = 'wss', linecolor = "black")
+base_fig +
+  theme(text = element_text(family = "Times New Roman")) +
+  ylab("Total WSS")
+  scale_y_continuous(labels = scales::label_number(scale_cut = cut_short_scale()))
+
+NbClust(data = df_km_imp[,c(1:72)], distance = "euclidean", method = "kmeans")
+
+# Compute k-means 
+set.seed(100)
+km3 <- kmeans(df_km_imp[,c(1:72)], 3, nstart = 50)
+km4 <- kmeans(df_km_imp, 4, nstart = 50)
+
+#add cluster number to the original data
+df_km_imp$clust3 <- km3$cluster
+df_km_imp$clust4 <- km4$cluster
+df_km_imp$group <- df_raw$group
+
+# frequency tables of cluster by group
+table(df_km_imp[,c("clust3","group")])
+table(df_km_imp[,c("clust4","group")])
+```
+
+
+```{r 2clust}
+# create subscales again - remember these are centered
+df_km_imp$Anh <- rowMeans(df_km_imp[,c("DASSd37","DASSd38","DASSd21","DASSd34","DASSd10","DASSd17","DASSd26","DASSd31","DASSd13","DASSd3","DASSd24","IDAS5","DASSd16","IDAS2")])
+df_km_imp$Anx <- rowMeans(df_km_imp[,c("DASSa15","DASSa7","DASSa20","DASSs33","DASSa40","DASSa4","DASSa41","DASSa25","DASSa28","DASSa36","DASSa23","DASSs12","DASSa19","DASSa2", "IDAS22", "IDAS3","DASSa9","DASSs22","DASSs8","DASSa30")])
+df_km_imp$Cog <- rowMeans(df_km_imp[,c("MEIME9","MEIME5","MEIME13","MEIME7","MEIME8","IDAS23","MEIME14","MEIME6","MEIME3","MEIME10","IDAS6","DASSd5","DASSd42","MEISM11")])
+df_km_imp$Dis <- rowMeans(df_km_imp[,c("DASSs1","DASSs27","DASSs11","DASSs6","DASSs39","DASSs18","DASSs14","DASSs29","DASSs32","DASSs35")])
+df_km_imp$Motiv <- rowMeans(df_km_imp[,c("MEISM26","MEISM25","MEISM27","MEISM20","MEISM23","MEISM19","MEISM24","MEISM21","MEIME2","MEISM12")])
+df_km_imp$Dys <- rowMeans(df_km_imp[,c("IDAS14","IDAS15","IDAS17","IDAS9")])
+df_km_imp$meds <- df_raw$meds
+
+df_km_imp <- df_km_imp %>% rename("Anhedonia" = "Anh",
+                                  "Anxiety" = "Anx",
+                                  "Cognitive" = "Cog",
+                                  "Distress" = "Dis",
+                                  "Motivation" = "Motiv",
+                                  "Dysphoria" = "Dys")
+cluster_summ <- tbl_summary(df_km_imp[,c(74,83:88)], by = "clust4",
+                       statistic = all_continuous() ~ "{mean} ({sd})") %>%
+  add_p() %>% 
+  add_q() %>%
+  as_gt() %>%
+  tab_header(title = "6-Factor Standardized Scores by Cluster: k = 4")
+cluster_summ
+
+cluster_summ3 <- tbl_summary(df_km_imp[,c(82:88)], by = "clust3",
+                       statistic = all_continuous() ~ "{mean} ({sd})") %>%
+  add_p() %>% 
+  add_q() %>%
+  as_gt() %>%
+  tab_header(title = "Z-Scores for 6-P Item Means by Cluster: k = 3")
+cluster_summ3
+```
+
+```{r fa}
+library(GPArotation)
+library(kableExtra)
+library(flextable)
+library(ggplot2)
+
+fafitfree <- fa(df_km_imp[,c(1:72)], nfactors = ncol(df_km_imp[,c(1:72)]), rotate = "none")
+n_factors <- length(fafitfree$e.values)
+scree     <- data.frame(
+  Factor_n =  as.factor(1:n_factors), 
+  Eigenvalue = fafitfree$e.values)
+ggplot(scree, aes(x = Factor_n, y = Eigenvalue, group = 1)) + 
+  geom_point() + geom_line() +
+  xlab("Number of factors") +
+  ylab("Initial eigenvalue") +
+  labs( title = "Scree Plot", 
+        subtitle = "(Based on the unreduced correlation matrix)")
+
+# parallel analysis
+parallel <- fa.parallel(df_km_imp[,c(1:72)])
+
+fa6<- fa(df_km_imp[,c(1:72)], nfactors = 6, rotate = "oblimin")
+fa6load <- as.data.frame(unclass(fa.sort(fa6$loadings)))
+fa6load
+
+fa5<- fa(df_km_imp[,c(1:72)], nfactors = 5, rotate = "oblimin")
+fa5load <- as.data.frame(unclass(fa.sort(fa5$loadings)))
+
+fa3<- fa(df_km_imp[,c(1:72)], nfactors = 3, rotate = "oblimin")
+as.data.frame(unclass(fa.sort(fa3$loadings)))
+
+
+#write.csv(fa6load, file = "fa6_loadings.csv")
+#write.csv(fa5load, file = "fa5_loadings.csv")
+```
+
+
+
+
+
+
+
